@@ -1,18 +1,23 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import process, fuzz
+import deepl
 
 st.set_page_config(page_title="US-DE Color Mapper", layout="wide")
 
 st.title("🎨 US → DE Color Mapping Tool")
 
+# 🔑 DeepL API Key input
+auth_key = st.text_input("Enter DeepL API Key", type="password")
+
+# 📂 Upload file
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
-def fuzzy_match(us_color, de_list):
-    match, score, _ = process.extractOne(us_color, de_list, scorer=fuzz.token_sort_ratio)
-    return match if score > 70 else None
 
-if uploaded_file:
+if uploaded_file and auth_key:
+
+    translator = deepl.Translator(auth_key)
+
     df = pd.read_excel(uploaded_file)
 
     st.subheader("Preview Data")
@@ -25,23 +30,45 @@ if uploaded_file:
 
     if st.button("🔍 Run Mapping"):
 
-        us_colors = df[us_col].dropna().unique()
-        de_colors = df[de_col].dropna().unique()
+        st.info("Translating German colors to English...")
 
+        # ✅ Translate ONLY unique values (saves API usage)
+        unique_de = df[de_col].dropna().unique()
+
+        translation_map = {}
+        for de in unique_de:
+            try:
+                translated = translator.translate_text(str(de), target_lang="EN-US").text
+                translation_map[de] = translated
+            except:
+                translation_map[de] = None
+
+        df["DE_Translated"] = df[de_col].map(translation_map)
+
+        # 🔍 Fuzzy match US with translated DE
         mapping = {}
 
+        us_colors = df[us_col].astype(str).unique()
+        de_translated = df["DE_Translated"].dropna().astype(str).unique()
+
         for us in us_colors:
-            if us in de_colors:
-                mapping[us] = us
-            else:
-                mapping[us] = fuzzy_match(us, de_colors)
+            try:
+                match, score, _ = process.extractOne(
+                    us,
+                    de_translated,
+                    scorer=fuzz.token_sort_ratio
+                )
+                mapping[us] = match if score > 70 else None
+            except:
+                mapping[us] = None
 
-        df["Mapped_DE_Color"] = df[us_col].map(mapping)
+        df["Mapped_DE"] = df[us_col].map(mapping)
 
-        st.success("✅ Mapping Completed!")
+        st.success("✅ Mapping Completed with DeepL!")
 
         st.dataframe(df)
 
+        # 📥 Download file
         output_file = "mapped_colors.xlsx"
         df.to_excel(output_file, index=False)
 

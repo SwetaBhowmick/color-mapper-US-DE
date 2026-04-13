@@ -2,21 +2,40 @@ import streamlit as st
 import pandas as pd
 from rapidfuzz import process, fuzz
 import deepl
+import unicodedata
 
 # -------------------------------
 # Page Config
 # -------------------------------
-st.set_page_config(page_title="US-DE Color Mapper", layout="wide")
+st.set_page_config(page_title="SE-FR Color Mapper", layout="wide")
 
-st.title("🎨 US → DE Color Mapping Tool (Clean + Accurate)")
+st.title("🎨 SE → FR Color Mapping Tool (Accurate + Accent Safe)")
 
 # -------------------------------
-# Helper Function (CLEAN TEXT)
+# Helper Functions
 # -------------------------------
+
+# Clean spaces + lowercase
 def clean_text(text):
     if pd.isna(text):
         return None
     return " ".join(str(text).strip().split()).lower()
+
+# Remove accents (é → e, ü → u)
+def remove_accents(text):
+    if text is None:
+        return None
+    return ''.join(
+        c for c in unicodedata.normalize('NFKD', text)
+        if not unicodedata.combining(c)
+    )
+
+# Full normalization (spaces + lowercase + accents)
+def normalize(text):
+    cleaned = clean_text(text)
+    if cleaned is None:
+        return None
+    return remove_accents(cleaned)
 
 # -------------------------------
 # Inputs
@@ -38,74 +57,74 @@ if uploaded_file and auth_key:
 
     columns = df.columns.tolist()
 
-    us_col = st.selectbox("Select US Color Column", columns)
-    de_col = st.selectbox("Select DE Color Column", columns)
+    se_col = st.selectbox("Select SE Column (Swedish)", columns)
+    fr_col = st.selectbox("Select FR Column (French)", columns)
 
     if st.button("🔍 Run Mapping"):
 
-        st.info("Translating German → English using DeepL...")
+        st.info("Translating Swedish → French using DeepL...")
 
         # -------------------------------
-        # Step 1: Preserve Original DE
+        # Step 1: Preserve Original FR
         # -------------------------------
-        df["DE_Original"] = df[de_col]
+        df["FR_Original"] = df[fr_col]
 
         # -------------------------------
-        # Step 2: Translate ONLY unique values
+        # Step 2: Translate SE → FR (unique values)
         # -------------------------------
-        unique_de = df[de_col].dropna().unique()
+        unique_se = df[se_col].dropna().unique()
 
         translation_map = {}
-        for de in unique_de:
+        for se in unique_se:
             try:
                 translated = translator.translate_text(
-                    str(de),
-                    target_lang="EN-US"
+                    str(se),
+                    target_lang="FR"
                 ).text
-                translation_map[de] = translated
+                translation_map[se] = translated
             except:
-                translation_map[de] = None
+                translation_map[se] = None
 
-        df["DE_Translated"] = df[de_col].map(translation_map)
+        df["SE_Translated_FR"] = df[se_col].map(translation_map)
 
         # -------------------------------
-        # Step 3: Clean text for matching
+        # Step 3: Normalize text
         # -------------------------------
-        df["US_Clean"] = df[us_col].apply(clean_text)
-        df["DE_Translated_Clean"] = df["DE_Translated"].apply(clean_text)
+        df["SE_Norm"] = df["SE_Translated_FR"].apply(normalize)
+        df["FR_Norm"] = df[fr_col].apply(normalize)
 
         # -------------------------------
         # Step 4: Fuzzy Matching
         # -------------------------------
         mapping = {}
 
-        us_values = df["US_Clean"].dropna().unique()
-        de_values = df["DE_Translated_Clean"].dropna().unique()
+        se_values = df["SE_Norm"].dropna().unique()
+        fr_values = df["FR_Norm"].dropna().unique()
 
-        for us in us_values:
+        for se in se_values:
             try:
                 match, score, _ = process.extractOne(
-                    us,
-                    de_values,
+                    se,
+                    fr_values,
                     scorer=fuzz.token_sort_ratio
                 )
-                mapping[us] = match if score > 70 else None
+                mapping[se] = match if score > 75 else None
             except:
-                mapping[us] = None
+                mapping[se] = None
 
         # -------------------------------
         # Step 5: Apply Mapping
         # -------------------------------
-        df["Mapped_DE_Clean"] = df["US_Clean"].map(mapping)
+        df["Mapped_FR_Norm"] = df["SE_Norm"].map(mapping)
 
         # -------------------------------
-        # Step 6: Map back to ORIGINAL DE
+        # Step 6: Map back to ORIGINAL FR
         # -------------------------------
         reverse_map = {
-            clean_text(v): k for k, v in translation_map.items() if v is not None
+            normalize(v): k for k, v in zip(df[fr_col], df[fr_col])
         }
 
-        df["Mapped_DE_Original"] = df["Mapped_DE_Clean"].map(reverse_map)
+        df["Mapped_FR_Original"] = df["Mapped_FR_Norm"].map(reverse_map)
 
         # -------------------------------
         # Output
@@ -118,13 +137,13 @@ if uploaded_file and auth_key:
         # -------------------------------
         # Download File
         # -------------------------------
-        output_file = "mapped_colors.xlsx"
+        output_file = "SE_FR_mapped.xlsx"
         df.to_excel(output_file, index=False)
 
         with open(output_file, "rb") as f:
             st.download_button(
                 label="📥 Download Mapped Excel",
                 data=f,
-                file_name="mapped_colors.xlsx",
+                file_name="SE_FR_mapped.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )

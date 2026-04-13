@@ -3,25 +3,26 @@ import pandas as pd
 from rapidfuzz import process, fuzz
 import deepl
 import unicodedata
+import re
 
 # -------------------------------
 # Page Config
 # -------------------------------
-st.set_page_config(page_title="SE-FR Color Mapper", layout="wide")
+st.set_page_config(page_title="SE-NL Color Mapper", layout="wide")
 
-st.title("🎨 SE → FR Color Mapping Tool (Accurate + Accent Safe)")
+st.title("🎨 SE → NL Color Mapping Tool (Accurate + Accent Safe + Clean Output)")
 
 # -------------------------------
 # Helper Functions
 # -------------------------------
 
-# Clean spaces + lowercase
+# Clean ONLY for matching (not for output)
 def clean_text(text):
     if pd.isna(text):
         return None
     return " ".join(str(text).strip().split()).lower()
 
-# Remove accents (é → e, ü → u)
+# Remove accents for matching only
 def remove_accents(text):
     if text is None:
         return None
@@ -30,12 +31,18 @@ def remove_accents(text):
         if not unicodedata.combining(c)
     )
 
-# Full normalization (spaces + lowercase + accents)
+# Normalize (used ONLY for comparison)
 def normalize(text):
     cleaned = clean_text(text)
     if cleaned is None:
         return None
     return remove_accents(cleaned)
+
+# Extract numbers (important for accuracy like "Blue 2")
+def extract_numbers(text):
+    if text is None:
+        return ""
+    return " ".join(re.findall(r'\d+', str(text)))
 
 # -------------------------------
 # Inputs
@@ -58,19 +65,19 @@ if uploaded_file and auth_key:
     columns = df.columns.tolist()
 
     se_col = st.selectbox("Select SE Column (Swedish)", columns)
-    fr_col = st.selectbox("Select FR Column (French)", columns)
+    nl_col = st.selectbox("Select NL Column (Dutch)", columns)
 
     if st.button("🔍 Run Mapping"):
 
-        st.info("Translating Swedish → French using DeepL...")
+        st.info("Translating Swedish → Dutch using DeepL...")
 
         # -------------------------------
-        # Step 1: Preserve Original FR
+        # Step 1: Preserve Original NL
         # -------------------------------
-        df["FR_Original"] = df[fr_col]
+        df["NL_Original"] = df[nl_col]
 
         # -------------------------------
-        # Step 2: Translate SE → FR (unique values)
+        # Step 2: Translate SE → NL
         # -------------------------------
         unique_se = df[se_col].dropna().unique()
 
@@ -79,52 +86,67 @@ if uploaded_file and auth_key:
             try:
                 translated = translator.translate_text(
                     str(se),
-                    target_lang="FR"
+                    target_lang="NL"
                 ).text
                 translation_map[se] = translated
             except:
                 translation_map[se] = None
 
-        df["SE_Translated_FR"] = df[se_col].map(translation_map)
+        df["SE_Translated_NL"] = df[se_col].map(translation_map)
 
         # -------------------------------
-        # Step 3: Normalize text
+        # Step 3: Normalize for matching
         # -------------------------------
-        df["SE_Norm"] = df["SE_Translated_FR"].apply(normalize)
-        df["FR_Norm"] = df[fr_col].apply(normalize)
+        df["SE_Norm"] = df["SE_Translated_NL"].apply(normalize)
+        df["NL_Norm"] = df[nl_col].apply(normalize)
+
+        df["SE_Num"] = df["SE_Translated_NL"].apply(extract_numbers)
+        df["NL_Num"] = df[nl_col].apply(extract_numbers)
 
         # -------------------------------
-        # Step 4: Fuzzy Matching
+        # Step 4: Smart Matching (text + number)
         # -------------------------------
         mapping = {}
 
         se_values = df["SE_Norm"].dropna().unique()
-        fr_values = df["FR_Norm"].dropna().unique()
+        nl_values = df["NL_Norm"].dropna().unique()
 
         for se in se_values:
-            try:
-                match, score, _ = process.extractOne(
-                    se,
-                    fr_values,
-                    scorer=fuzz.token_sort_ratio
-                )
-                mapping[se] = match if score > 75 else None
-            except:
-                mapping[se] = None
+            best_match = None
+            best_score = 0
+
+            for nl in nl_values:
+                score = fuzz.token_sort_ratio(se, nl)
+
+                # Boost score if numbers match
+                se_num = extract_numbers(se)
+                nl_num = extract_numbers(nl)
+
+                if se_num and nl_num and se_num == nl_num:
+                    score += 10
+
+                if score > best_score:
+                    best_score = score
+                    best_match = nl
+
+            mapping[se] = best_match if best_score > 75 else None
 
         # -------------------------------
         # Step 5: Apply Mapping
         # -------------------------------
-        df["Mapped_FR_Norm"] = df["SE_Norm"].map(mapping)
+        df["Mapped_NL_Norm"] = df["SE_Norm"].map(mapping)
 
         # -------------------------------
-        # Step 6: Map back to ORIGINAL FR
+        # Step 6: Map back to ORIGINAL NL
         # -------------------------------
-        reverse_map = {
-            normalize(v): k for k, v in zip(df[fr_col], df[fr_col])
-        }
+        reverse_map = {}
 
-        df["Mapped_FR_Original"] = df["Mapped_FR_Norm"].map(reverse_map)
+        for orig in df[nl_col].dropna().unique():
+            norm = normalize(orig)
+            if norm not in reverse_map:
+                reverse_map[norm] = orig  # keep ORIGINAL formatting
+
+        df["Mapped_NL_Original"] = df["Mapped_NL_Norm"].map(reverse_map)
 
         # -------------------------------
         # Output
@@ -135,15 +157,15 @@ if uploaded_file and auth_key:
         st.dataframe(df)
 
         # -------------------------------
-        # Download File
+        # Download
         # -------------------------------
-        output_file = "SE_FR_mapped.xlsx"
+        output_file = "SE_NL_mapped.xlsx"
         df.to_excel(output_file, index=False)
 
         with open(output_file, "rb") as f:
             st.download_button(
                 label="📥 Download Mapped Excel",
                 data=f,
-                file_name="SE_FR_mapped.xlsx",
+                file_name="SE_NL_mapped.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )

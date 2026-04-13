@@ -1,1 +1,1 @@
-# color-mapper-US-DE
+# color-mapper-SE-FR
